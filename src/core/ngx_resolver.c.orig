@@ -464,7 +464,7 @@ ngx_resolve_name_locked(ngx_resolver_t *r, ngx_resolver_ctx_t *ctx)
     ngx_int_t             rc;
     ngx_uint_t            naddrs;
     ngx_addr_t           *addrs;
-    ngx_resolver_ctx_t   *next;
+    ngx_resolver_ctx_t   *next, *last;
     ngx_resolver_node_t  *rn;
 
     ngx_strlow(ctx->name.data, ctx->name.data, ctx->name.len);
@@ -474,6 +474,9 @@ ngx_resolve_name_locked(ngx_resolver_t *r, ngx_resolver_ctx_t *ctx)
     rn = ngx_resolver_lookup_name(r, &ctx->name, hash);
 
     if (rn) {
+
+        /* ctx can be a list after NGX_RESOLVE_CNAME */
+        for (last = ctx; last->next; last = last->next);
 
         if (rn->valid >= ngx_time()) {
 
@@ -502,7 +505,7 @@ ngx_resolve_name_locked(ngx_resolver_t *r, ngx_resolver_ctx_t *ctx)
                     }
                 }
 
-                ctx->next = rn->waiting;
+                last->next = rn->waiting;
                 rn->waiting = NULL;
 
                 /* unlock name mutex */
@@ -548,7 +551,7 @@ ngx_resolve_name_locked(ngx_resolver_t *r, ngx_resolver_ctx_t *ctx)
                 return ngx_resolve_name_locked(r, ctx);
             }
 
-            ctx->next = rn->waiting;
+            last->next = rn->waiting;
             rn->waiting = NULL;
 
             /* unlock name mutex */
@@ -567,7 +570,7 @@ ngx_resolve_name_locked(ngx_resolver_t *r, ngx_resolver_ctx_t *ctx)
 
         if (rn->waiting) {
 
-            ctx->next = rn->waiting;
+            last->next = rn->waiting;
             rn->waiting = ctx;
             ctx->state = NGX_AGAIN;
 
@@ -638,8 +641,14 @@ ngx_resolve_name_locked(ngx_resolver_t *r, ngx_resolver_ctx_t *ctx)
         ngx_resolver_free(r, rn->name);
         ngx_resolver_free(r, rn);
 
-        ctx->state = NGX_RESOLVE_NXDOMAIN;
-        ctx->handler(ctx);
+        do {
+            ctx->state = NGX_RESOLVE_NXDOMAIN;
+            next = ctx->next;
+
+            ctx->handler(ctx);
+
+            ctx = next;
+        } while (ctx);
 
         return NGX_OK;
     }
